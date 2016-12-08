@@ -281,6 +281,7 @@ def exec_sbt(sbt_args=()):
                                 stdout=subprocess.PIPE)
     echo_proc.wait()
     for line in iter(sbt_proc.stdout.readline, ''):
+        line = line.decode()
         if not sbt_output_filter.match(line):
             print(line, end='')
     retcode = sbt_proc.wait()
@@ -301,6 +302,7 @@ def get_hadoop_profiles(hadoop_version):
         "hadoop2.2": ["-Pyarn", "-Phadoop-2.2"],
         "hadoop2.3": ["-Pyarn", "-Phadoop-2.3", "-Dhadoop.version=2.3.0"],
         "hadoop2.6": ["-Pyarn", "-Phadoop-2.6"],
+        "hadoop2.6-criteo": ["-Pyarn", "-Phadoop-2.6", "-Dhadoop.version=2.6.0-cdh5.5.0"]
     }
 
     if hadoop_version in sbt_maven_hadoop_profiles:
@@ -490,7 +492,7 @@ def main():
         os.environ["PATH"] = "/home/anaconda/envs/py3k/bin:" + os.environ.get("PATH")
     else:
         # else we're running locally and can use local settings
-        build_tool = "sbt"
+        build_tool = os.environ.get("SPARK_BUILD_TOOL", "sbt")
         hadoop_version = os.environ.get("HADOOP_PROFILE", "hadoop2.3")
         test_env = "local"
 
