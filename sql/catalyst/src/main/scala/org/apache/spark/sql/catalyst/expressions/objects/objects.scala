@@ -686,19 +686,25 @@ case class InitializeJavaBean(beanInstance: Expression, setters: Map[String, Exp
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     val instanceGen = beanInstance.genCode(ctx)
 
+    val javaBeanInstance = ctx.freshName("javaBean")
+    val beanInstanceJavaType = ctx.javaType(beanInstance.dataType)
+    ctx.addMutableState(beanInstanceJavaType, javaBeanInstance, "")
+
     val initialize = setters.map {
       case (setterMethod, fieldValue) =>
         val fieldGen = fieldValue.genCode(ctx)
         s"""
            ${fieldGen.code}
-           ${instanceGen.value}.$setterMethod(${fieldGen.value});
+           ${javaBeanInstance}.$setterMethod(${fieldGen.value});
          """
     }
+    val initializeCode = ctx.splitExpressions(ctx.INPUT_ROW, initialize.toSeq)
 
     val code = s"""
       ${instanceGen.code}
+      this.${javaBeanInstance} = ${instanceGen.value};
       if (!${instanceGen.isNull}) {
-        ${initialize.mkString("\n")}
+        $initializeCode
       }
      """
     ev.copy(code = code, isNull = instanceGen.isNull, value = instanceGen.value)
@@ -731,7 +737,10 @@ case class AssertNotNull(child: Expression, walkedTypePath: Seq[String])
       "If the schema is inferred from a Scala tuple/case class, or a Java bean, " +
       "please try to use scala.Option[_] or other nullable types " +
       "(e.g. java.lang.Integer instead of int/scala.Int)."
-    val errMsgField = ctx.addReferenceObj("errMsg", errMsg)
+
+    // Use unnamed reference that doesn't create a local field here to reduce the number of fields
+    // because errMsgField is used only when the value is null.
+    val errMsgField = ctx.addReferenceObj(errMsg)
 
     val code = s"""
       ${childGen.code}
@@ -766,7 +775,9 @@ case class GetExternalRowField(
   private val errMsg = s"The ${index}th field '$fieldName' of input row cannot be null."
 
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
-    val errMsgField = ctx.addReferenceObj("errMsg", errMsg)
+    // Use unnamed reference that doesn't create a local field here to reduce the number of fields
+    // because errMsgField is used only when the field is null.
+    val errMsgField = ctx.addReferenceObj(errMsg)
     val row = child.genCode(ctx)
     val code = s"""
       ${row.code}
@@ -804,7 +815,9 @@ case class ValidateExternalType(child: Expression, expected: DataType)
   private val errMsg = s" is not a valid external type for schema of ${expected.simpleString}"
 
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
-    val errMsgField = ctx.addReferenceObj("errMsg", errMsg)
+    // Use unnamed reference that doesn't create a local field here to reduce the number of fields
+    // because errMsgField is used only when the type doesn't match.
+    val errMsgField = ctx.addReferenceObj(errMsg)
     val input = child.genCode(ctx)
     val obj = input.value
 
