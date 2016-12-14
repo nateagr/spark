@@ -17,27 +17,25 @@
 
 package org.apache.spark.ml.feature;
 
-import java.io.Serializable;
-import java.util.Arrays;
-import java.util.List;
-
-import scala.Tuple2;
-
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.mllib.linalg.Matrix;
+import org.apache.spark.mllib.linalg.Vector;
+import org.apache.spark.mllib.linalg.Vectors;
+import org.apache.spark.mllib.linalg.distributed.RowMatrix;
+import org.apache.spark.sql.DataFrame;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SQLContext;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import scala.Tuple2;
 
-import org.apache.spark.api.java.function.Function;
-import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.mllib.linalg.distributed.RowMatrix;
-import org.apache.spark.mllib.linalg.Matrix;
-import org.apache.spark.mllib.linalg.Vector;
-import org.apache.spark.mllib.linalg.Vectors;
-import org.apache.spark.sql.DataFrame;
-import org.apache.spark.sql.Row;
-import org.apache.spark.sql.SQLContext;
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.List;
 
 public class JavaPCASuite implements Serializable {
   private transient JavaSparkContext jsc;
@@ -108,7 +106,11 @@ public class JavaPCASuite implements Serializable {
       .fit(df);
     List<Row> result = pca.transform(df).select("pca_features", "expected").toJavaRDD().collect();
     for (Row r : result) {
-      Assert.assertEquals(r.get(1), r.get(0));
+      Vector calculatedVector = (Vector) r.get(0);
+      Vector expectedVector = (Vector) r.get(1);
+      for (int i = 0; i < calculatedVector.size(); i++) {
+        Assert.assertEquals(calculatedVector.apply(i), expectedVector.apply(i), 1.0e-8);
+      }
     }
   }
 }
