@@ -305,10 +305,15 @@ class Analyzer(
           case other => Alias(other, other.toString)()
         }
 
-        val nonNullBitmask = x.bitmasks.reduce(_ & _)
+        // The rightmost bit in the bitmasks corresponds to the last expression in groupByAliases
+        // with 0 indicating this expression is in the grouping set. The following line of code
+        // calculates the bitmask representing the expressions that absent in at least one grouping
+        // set (indicated by 1).
+        val nullBitmask = x.bitmasks.reduce(_ | _)
 
+        val attrLength = groupByAliases.length
         val expandedAttributes = groupByAliases.zipWithIndex.map { case (a, idx) =>
-          a.toAttribute.withNullability((nonNullBitmask & 1 << idx) == 0)
+          a.toAttribute.withNullability(((nullBitmask >> (attrLength - idx - 1)) & 1) == 1)
         }
 
         val expand = Expand(x.bitmasks, groupByAliases, expandedAttributes, gid, x.child)
@@ -397,14 +402,15 @@ class Analyzer(
               .toAggregateExpression()
             , "__pivot_" + a.sql)()
           }
-          val secondAgg = Aggregate(groupByExprs, groupByExprs ++ pivotAggs, firstAgg)
+          val groupByExprsAttr = groupByExprs.map(_.toAttribute)
+          val secondAgg = Aggregate(groupByExprsAttr, groupByExprsAttr ++ pivotAggs, firstAgg)
           val pivotAggAttribute = pivotAggs.map(_.toAttribute)
           val pivotOutputs = pivotValues.zipWithIndex.flatMap { case (value, i) =>
             aggregates.zip(pivotAggAttribute).map { case (aggregate, pivotAtt) =>
               Alias(ExtractValue(pivotAtt, Literal(i), resolver), outputName(value, aggregate))()
             }
           }
-          Project(groupByExprs ++ pivotOutputs, secondAgg)
+          Project(groupByExprsAttr ++ pivotOutputs, secondAgg)
         } else {
           val pivotAggregates: Seq[NamedExpression] = pivotValues.flatMap { value =>
             def ifExpr(expr: Expression) = {
@@ -961,7 +967,39 @@ class Analyzer(
       def failOnOuterReference(p: LogicalPlan): Unit = {
         if (p.expressions.exists(containsOuter)) {
           failAnalysis(
-            s"Correlated predicates are not supported outside of WHERE/HAVING clauses: $p")
+            "Expressions referencing the outer query are not supported outside of WHERE/HAVING " +
+              s"clauses: $p")
+        }
+      }
+
+      // SPARK-17348: A potential incorrect result case.
+      // When a correlated predicate is a non-equality predicate,
+      // certain operators are not permitted from the operator
+      // hosting the correlated predicate up to the operator on the outer table.
+      // Otherwise, the pull up of the correlated predicate
+      // will generate a plan with a different semantics
+      // which could return incorrect result.
+      // Currently we check for Aggregate and Window operators
+      //
+      // Below shows an example of a Logical Plan during Analyzer phase that
+      // show this problem. Pulling the correlated predicate [outer(c2#77) >= ..]
+      // through the Aggregate (or Window) operator could alter the result of
+      // the Aggregate.
+      //
+      // Project [c1#76]
+      // +- Project [c1#87, c2#88]
+      // :  (Aggregate or Window operator)
+      // :  +- Filter [outer(c2#77) >= c2#88)]
+      // :     +- SubqueryAlias t2, `t2`
+      // :        +- Project [_1#84 AS c1#87, _2#85 AS c2#88]
+      // :           +- LocalRelation [_1#84, _2#85]
+      // +- SubqueryAlias t1, `t1`
+      // +- Project [_1#73 AS c1#76, _2#74 AS c2#77]
+      // +- LocalRelation [_1#73, _2#74]
+      def failOnNonEqualCorrelatedPredicate(found: Boolean, p: LogicalPlan): Unit = {
+        if (found) {
+          // Report a non-supported case as an exception
+          failAnalysis(s"Correlated column is not allowed in a non-equality predicate:\n$p")
         }
       }
 
@@ -975,11 +1013,19 @@ class Analyzer(
         localPredicateReferences -- p.outputSet
       }
 
+      var foundNonEqualCorrelatedPred : Boolean = false
+
       // Simplify the predicates before pulling them out.
       val transformed = BooleanSimplification(sub) transformUp {
         case f @ Filter(cond, child) =>
           // Find all predicates with an outer reference.
           val (correlated, local) = splitConjunctivePredicates(cond).partition(containsOuter)
+
+          // Find any non-equality correlated predicates
+          foundNonEqualCorrelatedPred = foundNonEqualCorrelatedPred || correlated.exists {
+            case _: EqualTo | _: EqualNullSafe => false
+            case _ => true
+          }
 
           // Rewrite the filter without the correlated predicates if any.
           correlated match {
@@ -1002,12 +1048,17 @@ class Analyzer(
           }
         case a @ Aggregate(grouping, expressions, child) =>
           failOnOuterReference(a)
+          failOnNonEqualCorrelatedPredicate(foundNonEqualCorrelatedPred, a)
+
           val referencesToAdd = missingReferences(a)
           if (referencesToAdd.nonEmpty) {
             Aggregate(grouping ++ referencesToAdd, expressions ++ referencesToAdd, child)
           } else {
             a
           }
+        case w : Window =>
+          failOnNonEqualCorrelatedPredicate(foundNonEqualCorrelatedPred, w)
+          w
         case j @ Join(left, _, RightOuter, _) =>
           failOnOuterReference(j)
           failOnOuterReferenceInSubTree(left, "a RIGHT OUTER JOIN")
@@ -1025,6 +1076,19 @@ class Analyzer(
         case e: Expand =>
           failOnOuterReferenceInSubTree(e, "an EXPAND")
           e
+        case l : LocalLimit =>
+          failOnOuterReferenceInSubTree(l, "a LIMIT")
+          l
+        // Since LIMIT <n> is represented as GlobalLimit(<n>, (LocalLimit (<n>, child))
+        // and we are walking bottom up, we will fail on LocalLimit before
+        // reaching GlobalLimit.
+        // The code below is just a safety net.
+        case g : GlobalLimit =>
+          failOnOuterReferenceInSubTree(g, "a LIMIT")
+          g
+        case s : Sample =>
+          failOnOuterReferenceInSubTree(s, "a TABLESAMPLE")
+          s
         case p =>
           failOnOuterReference(p)
           p
@@ -1118,9 +1182,6 @@ class Analyzer(
      */
     private def resolveSubQueries(plan: LogicalPlan, plans: Seq[LogicalPlan]): LogicalPlan = {
       plan transformExpressions {
-        case s @ ScalarSubquery(sub, conditions, exprId)
-            if sub.resolved && conditions.isEmpty && sub.output.size != 1 =>
-          failAnalysis(s"Scalar subquery must return only one column, but got ${sub.output.size}")
         case s @ ScalarSubquery(sub, _, exprId) if !sub.resolved =>
           resolveSubQuery(s, plans, 1)(ScalarSubquery(_, _, exprId))
         case e @ Exists(sub, exprId) =>
@@ -1827,15 +1888,7 @@ class Analyzer(
     override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
       case j @ Join(left, right, UsingJoin(joinType, usingCols), condition)
           if left.resolved && right.resolved && j.duplicateResolved =>
-        // Resolve the column names referenced in using clause from both the legs of join.
-        val lCols = usingCols.flatMap(col => left.resolveQuoted(col.name, resolver))
-        val rCols = usingCols.flatMap(col => right.resolveQuoted(col.name, resolver))
-        if ((lCols.length == usingCols.length) && (rCols.length == usingCols.length)) {
-          val joinNames = lCols.map(exp => exp.name)
-          commonNaturalJoinProcessing(left, right, joinType, joinNames, None)
-        } else {
-          j
-        }
+        commonNaturalJoinProcessing(left, right, joinType, usingCols, None)
       case j @ Join(left, right, NaturalJoin(joinType), condition) if j.resolvedExceptNatural =>
         // find common column names from both sides
         val joinNames = left.output.map(_.name).intersect(right.output.map(_.name))
@@ -1850,18 +1903,16 @@ class Analyzer(
       joinNames: Seq[String],
       condition: Option[Expression]) = {
     val leftKeys = joinNames.map { keyName =>
-      val joinColumn = left.output.find(attr => resolver(attr.name, keyName))
-      assert(
-        joinColumn.isDefined,
-        s"$keyName should exist in ${left.output.map(_.name).mkString(",")}")
-      joinColumn.get
+      left.output.find(attr => resolver(attr.name, keyName)).getOrElse {
+        throw new AnalysisException(s"USING column `$keyName` can not be resolved with the " +
+          s"left join side, the left output is: [${left.output.map(_.name).mkString(", ")}]")
+      }
     }
     val rightKeys = joinNames.map { keyName =>
-      val joinColumn = right.output.find(attr => resolver(attr.name, keyName))
-      assert(
-        joinColumn.isDefined,
-        s"$keyName should exist in ${right.output.map(_.name).mkString(",")}")
-      joinColumn.get
+      right.output.find(attr => resolver(attr.name, keyName)).getOrElse {
+        throw new AnalysisException(s"USING column `$keyName` can not be resolved with the " +
+          s"right join side, the right output is: [${right.output.map(_.name).mkString(", ")}]")
+      }
     }
     val joinPairs = leftKeys.zip(rightKeys)
 

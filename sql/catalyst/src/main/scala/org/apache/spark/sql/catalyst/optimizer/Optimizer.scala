@@ -646,45 +646,71 @@ object FoldablePropagation extends Rule[LogicalPlan] {
       }
       case _ => Nil
     })
+    val replaceFoldable: PartialFunction[Expression, Expression] = {
+      case a: AttributeReference if foldableMap.contains(a) => foldableMap(a)
+    }
 
     if (foldableMap.isEmpty) {
       plan
     } else {
       var stop = false
       CleanupAliases(plan.transformUp {
-        case u: Union =>
-          stop = true
-          u
-        case c: Command =>
-          stop = true
-          c
-        // For outer join, although its output attributes are derived from its children, they are
-        // actually different attributes: the output of outer join is not always picked from its
-        // children, but can also be null.
+        // A leaf node should not stop the folding process (note that we are traversing up the
+        // tree, starting at the leaf nodes); so we are allowing it.
+        case l: LeafNode =>
+          l
+
+        // We can only propagate foldables for a subset of unary nodes.
+        case u: UnaryNode if !stop && canPropagateFoldables(u) =>
+          u.transformExpressions(replaceFoldable)
+
+        // Allow inner joins. We do not allow outer join, although its output attributes are
+        // derived from its children, they are actually different attributes: the output of outer
+        // join is not always picked from its children, but can also be null.
         // TODO(cloud-fan): It seems more reasonable to use new attributes as the output attributes
         // of outer join.
-        case j @ Join(_, _, LeftOuter | RightOuter | FullOuter, _) =>
-          stop = true
-          j
+        case j @ Join(_, _, Inner, _) =>
+          j.transformExpressions(replaceFoldable)
 
-        // These 3 operators take attributes as constructor parameters, and these attributes
-        // can't be replaced by alias.
-        case m: MapGroups =>
+        // We can fold the projections an expand holds. However expand changes the output columns
+        // and often reuses the underlying attributes; so we cannot assume that a column is still
+        // foldable after the expand has been applied.
+        // TODO(hvanhovell): Expand should use new attributes as the output attributes.
+        case expand: Expand if !stop =>
+          val newExpand = expand.copy(projections = expand.projections.map { projection =>
+            projection.map(_.transform(replaceFoldable))
+          })
           stop = true
-          m
-        case f: FlatMapGroupsInR =>
-          stop = true
-          f
-        case c: CoGroup =>
-          stop = true
-          c
+          newExpand
 
-        case p: LogicalPlan if !stop => p.transformExpressions {
-          case a: AttributeReference if foldableMap.contains(a) =>
-            foldableMap(a)
-        }
+        case other =>
+          stop = true
+          other
       })
     }
+  }
+
+  /**
+   * Whitelist of all [[UnaryNode]]s for which we allow foldable propagation.
+   */
+  private def canPropagateFoldables(u: UnaryNode): Boolean = u match {
+    case _: Project => true
+    case _: Filter => true
+    case _: SubqueryAlias => true
+    case _: Aggregate => true
+    case _: Window => true
+    case _: Sample => true
+    case _: GlobalLimit => true
+    case _: LocalLimit => true
+    case _: Generate => true
+    case _: Distinct => true
+    case _: AppendColumns => true
+    case _: AppendColumnsWithObject => true
+    case _: BroadcastHint => true
+    case _: RedistributeData => true
+    case _: Repartition => true
+    case _: Sort => true
+    case _ => false
   }
 }
 
@@ -1020,7 +1046,7 @@ object PushDownPredicate extends Rule[LogicalPlan] with PredicateHelper {
     // state and all the input rows processed before. In another word, the order of input rows
     // matters for non-deterministic expressions, while pushing down predicates changes the order.
     case filter @ Filter(condition, project @ Project(fields, grandChild))
-      if fields.forall(_.deterministic) =>
+      if fields.forall(_.deterministic) && canPushThroughCondition(grandChild, condition) =>
 
       // Create a map of Aliases to their values from the child projection.
       // e.g., 'SELECT a + b AS c, d ...' produces Map(c -> a + b).
@@ -1161,6 +1187,20 @@ object PushDownPredicate extends Rule[LogicalPlan] with PredicateHelper {
       filter
     }
   }
+
+  /**
+   * Check if we can safely push a filter through a projection, by making sure that predicate
+   * subqueries in the condition do not contain the same attributes as the plan they are moved
+   * into. This can happen when the plan and predicate subquery have the same source.
+   */
+  private def canPushThroughCondition(plan: LogicalPlan, condition: Expression): Boolean = {
+    val attributes = plan.outputSet
+    val matched = condition.find {
+      case PredicateSubquery(p, _, _, _) => p.outputSet.intersect(attributes).nonEmpty
+      case _ => false
+    }
+    matched.isEmpty
+  }
 }
 
 /**
@@ -1249,7 +1289,7 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
         split(joinCondition.map(splitConjunctivePredicates).getOrElse(Nil), left, right)
 
       joinType match {
-        case Inner | LeftExistence(_) =>
+        case Inner |  LeftSemi | ExistenceJoin(_) =>
           // push down the single side only join filter for both sides sub queries
           val newLeft = leftJoinConditions.
             reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
@@ -1266,14 +1306,14 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
           val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
           Join(newLeft, newRight, RightOuter, newJoinCond)
-        case LeftOuter =>
+        case LeftOuter | LeftAnti =>
           // push down the right side only join filter for right sub query
           val newLeft = left
           val newRight = rightJoinConditions.
             reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
           val newJoinCond = (leftJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
-          Join(newLeft, newRight, LeftOuter, newJoinCond)
+          Join(newLeft, newRight, joinType, newJoinCond)
         case FullOuter => j
         case NaturalJoin(_) => sys.error("Untransformed NaturalJoin node")
         case UsingJoin(_, _) => sys.error("Untransformed Using join node")
