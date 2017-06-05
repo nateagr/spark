@@ -114,6 +114,7 @@ $(document).ready(function() {
           attempt["startTime"] = formatDate(attempt["startTime"]);
           attempt["endTime"] = formatDate(attempt["endTime"]);
           attempt["lastUpdated"] = formatDate(attempt["lastUpdated"]);
+          attempt["duration"] = formatDuration(attempt["duration"]);
           var app_clone = {"id" : id, "name" : name, "num" : num, "attempts" : [attempt]};
           array.push(app_clone);
         }
@@ -125,7 +126,7 @@ $(document).ready(function() {
         }
 
       $.get("static/historypage-template.html", function(template) {
-        historySummary.append(Mustache.render($(template).filter("#history-summary-template").html(),data));
+        var apps = $(Mustache.render($(template).filter("#history-summary-template").html(),data));
         var selector = "#history-summary-table";
         var conf = {
                     "columns": [
@@ -155,24 +156,20 @@ $(document).ready(function() {
 
         if (hasMultipleAttempts) {
           jQuery.extend(conf, rowGroupConf);
-          var rowGroupCells = document.getElementsByClassName("rowGroupColumn");
+          var rowGroupCells = apps.find(".rowGroupColumn");
           for (i = 0; i < rowGroupCells.length; i++) {
             rowGroupCells[i].style='background-color: #ffffff';
           }
         }
 
         if (!hasMultipleAttempts) {
-          var attemptIDCells = document.getElementsByClassName("attemptIDSpan");
+          var attemptIDCells = apps.find(".attemptIDSpan");
           for (i = 0; i < attemptIDCells.length; i++) {
             attemptIDCells[i].style.display='none';
           }
         }
 
-        var durationCells = document.getElementsByClassName("durationClass");
-        for (i = 0; i < durationCells.length; i++) {
-          var timeInMilliseconds = parseInt(durationCells[i].title);
-          durationCells[i].innerHTML = formatDuration(timeInMilliseconds);
-        }
+        historySummary.append(apps);
 
         if ($(selector.concat(" tr")).length < 20) {
           $.extend(conf, {paging: false});
