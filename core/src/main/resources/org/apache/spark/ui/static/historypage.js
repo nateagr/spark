@@ -119,63 +119,47 @@ $(document).ready(function() {
           array.push(app_clone);
         }
       }
+      if(array.length < 20) {
+        $.fn.dataTable.defaults.paging = false;
+      }
 
       var data = {
         "uiroot": uiRoot,
-        "applications": array
-        }
-
+        "applications": array,
+        "hasMultipleAttempts" : hasMultipleAttempts,
+      }
       $.get("static/historypage-template.html", function(template) {
-        var apps = $(Mustache.render($(template).filter("#history-summary-template").html(),data));
-        var selector = "#history-summary-table";
+        var sibling = historySummary.prev();
+        historySummary.detach();
+        historySummary.append(Mustache.render($(template).filter("#history-summary-template").html(),data));
         var conf = {
-                    "columns": [
-                        {name: 'first', type: "appid-numeric"},
-                        {name: 'second'},
-                        {name: 'third'},
-                        {name: 'fourth'},
-                        {name: 'fifth'},
-                        {name: 'sixth', type: "title-numeric"},
-                        {name: 'seventh'},
-                        {name: 'eighth'},
-                        {name: 'ninth'},
-                    ],
-                    "columnDefs": [
-                        {"searchable": false, "targets": [5]}
-                    ],
-                    "autoWidth": false,
-                    "order": [[ 4, "desc" ]]
+          "columns": [
+              {name: 'first', type: "appid-numeric"},
+              {name: 'second'},
+              {name: 'third'},
+              {name: 'fourth'},
+              {name: 'fifth'},
+              {name: 'sixth', type: "title-numeric"},
+              {name: 'seventh'},
+              {name: 'eighth'},
+              {name: 'ninth'},
+          ],
+          "columnDefs": [
+              {"searchable": false, "targets": [5]}
+          ],
+          "autoWidth": false,
+          "order": [[ hasMultipleAttempts? 4 : 3, "desc" ]],                    
+          "rowsGroup": hasMultipleAttempts? [
+            'first:name',
+            'second:name'
+          ] : undefined,
         };
-
-        var rowGroupConf = {
-                           "rowsGroup": [
-                               'first:name',
-                               'second:name'
-                           ],
-        };
-
-        if (hasMultipleAttempts) {
-          jQuery.extend(conf, rowGroupConf);
-          var rowGroupCells = apps.find(".rowGroupColumn");
-          for (i = 0; i < rowGroupCells.length; i++) {
-            rowGroupCells[i].style='background-color: #ffffff';
-          }
-        }
 
         if (!hasMultipleAttempts) {
-          var attemptIDCells = apps.find(".attemptIDSpan");
-          for (i = 0; i < attemptIDCells.length; i++) {
-            attemptIDCells[i].style.display='none';
-          }
+          conf.columns.splice(2, 1);
         }
-
-        historySummary.append(apps);
-
-        if ($(selector.concat(" tr")).length < 20) {
-          $.extend(conf, {paging: false});
-        }
-
-        $(selector).DataTable(conf);
+        historySummary.find("#history-summary-table").DataTable(conf);
+        sibling.after(historySummary);
         $('#hisotry-summary [data-toggle="tooltip"]').tooltip();
       });
     });
