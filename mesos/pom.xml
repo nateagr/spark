@@ -69,7 +69,7 @@
     
     <dependency>
       <groupId>org.apache.spark</groupId>
-      <artifactId>spark-test-tags_${scala.binary.version}</artifactId>
+      <artifactId>spark-tags_${scala.binary.version}</artifactId>
     </dependency>
 
     <!-- Explicitly depend on shaded dependencies from the parent, since shaded deps aren't transitive -->
