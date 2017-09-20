@@ -682,7 +682,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with Timeou
 
   // Helper functions to extract commonly used code in Fetch Failure test cases
   private def setupStageAbortTest(sc: SparkContext) {
-    sc.listenerBus.addListener(new EndListener())
+    sc.listenerBus.addToSharedQueue(new EndListener())
     ended = false
     jobResult = null
   }

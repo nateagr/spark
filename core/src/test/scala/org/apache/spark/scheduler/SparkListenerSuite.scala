@@ -22,6 +22,7 @@ import java.util.concurrent.Semaphore
 import scala.collection.mutable
 import scala.collection.JavaConverters._
 
+import org.mockito.Mockito
 import org.scalatest.Matchers
 
 import org.apache.spark._
@@ -31,38 +32,43 @@ import org.apache.spark.util.{ResetSystemProperties, RpcUtils}
 class SparkListenerSuite extends SparkFunSuite with LocalSparkContext with Matchers
   with ResetSystemProperties {
 
+  import LiveListenerBus._
+
   /** Length of time to wait while draining listener events. */
   val WAIT_TIMEOUT_MILLIS = 10000
 
   val jobCompletionTime = 1421191296660L
 
+  private val mockSparkContext: SparkContext = Mockito.mock(classOf[SparkContext])
+
   test("don't call sc.stop in listener") {
     sc = new SparkContext("local", "SparkListenerSuite", new SparkConf())
     val listener = new SparkContextStoppingListener(sc)
-    val bus = new LiveListenerBus(sc)
-    bus.addListener(listener)
 
-    // Starting listener bus should flush all buffered events
-    bus.start()
-    bus.post(SparkListenerJobEnd(0, jobCompletionTime, JobSucceeded))
-    bus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
+    sc.listenerBus.addToSharedQueue(listener)
+    sc.listenerBus.post(SparkListenerJobEnd(0, jobCompletionTime, JobSucceeded))
+    sc.listenerBus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
+    sc.stop()
 
-    bus.stop()
     assert(listener.sparkExSeen)
   }
 
   test("basic creation and shutdown of LiveListenerBus") {
-    sc = new SparkContext("local", "SparkListenerSuite", new SparkConf())
+    val conf = new SparkConf()
+    sc = new SparkContext("local", "SparkListenerSuite", conf)
     val counter = new BasicJobCounter
-    val bus = new LiveListenerBus(sc)
-    bus.addListener(counter)
+    val bus = new LiveListenerBus(conf)
+    bus.addToSharedQueue(counter)
 
-    // Listener bus hasn't started yet, so posting events should not increment counter
+    // Post five events:
     (1 to 5).foreach { _ => bus.post(SparkListenerJobEnd(0, jobCompletionTime, JobSucceeded)) }
+
+    // Five messages should be marked as received and queued, but no messages should be posted to
+    // listeners yet because the the listener bus hasn't been started.
     assert(counter.count === 0)
 
     // Starting listener bus should flush all buffered events
-    bus.start()
+    bus.start(mockSparkContext)
     bus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
     assert(counter.count === 5)
 
@@ -73,14 +79,14 @@ class SparkListenerSuite extends SparkFunSuite with LocalSparkContext with Match
 
     // Listener bus must not be started twice
     intercept[IllegalStateException] {
-      val bus = new LiveListenerBus(sc)
-      bus.start()
-      bus.start()
+      val bus = new LiveListenerBus(conf)
+      bus.start(mockSparkContext)
+      bus.start(mockSparkContext)
     }
 
     // ... or stopped before starting
     intercept[IllegalStateException] {
-      val bus = new LiveListenerBus(sc)
+      val bus = new LiveListenerBus(conf)
       bus.stop()
     }
   }
@@ -107,12 +113,14 @@ class SparkListenerSuite extends SparkFunSuite with LocalSparkContext with Match
         drained = true
       }
     }
-    sc = new SparkContext("local", "SparkListenerSuite", new SparkConf())
-    val bus = new LiveListenerBus(sc)
+
+    val conf = new SparkConf()
+    sc = new SparkContext("local", "SparkListenerSuite", conf)
+    val bus = new LiveListenerBus(conf)
     val blockingListener = new BlockingListener
 
-    bus.addListener(blockingListener)
-    bus.start()
+    bus.addToSharedQueue(blockingListener)
+    bus.start(mockSparkContext)
     bus.post(SparkListenerJobEnd(0, jobCompletionTime, JobSucceeded))
 
     listenerStarted.acquire()
@@ -354,21 +362,22 @@ class SparkListenerSuite extends SparkFunSuite with LocalSparkContext with Match
     val badListener = new BadListener
     val jobCounter1 = new BasicJobCounter
     val jobCounter2 = new BasicJobCounter
-    sc = new SparkContext("local", "SparkListenerSuite", new SparkConf())
-    val bus = new LiveListenerBus(sc)
+
+    val conf = new SparkConf()
+    sc = new SparkContext("local", "SparkListenerSuite")
+    val bus = new LiveListenerBus(conf)
 
     // Propagate events to bad listener first
-    bus.addListener(badListener)
-    bus.addListener(jobCounter1)
-    bus.addListener(jobCounter2)
-    bus.start()
+    bus.addToSharedQueue(badListener)
+    bus.addToSharedQueue(jobCounter1)
+    bus.addToSharedQueue(jobCounter2)
+    bus.start(mockSparkContext)
 
     // Post events to all listeners, and wait until the queue is drained
     (1 to 5).foreach { _ => bus.post(SparkListenerJobEnd(0, jobCompletionTime, JobSucceeded)) }
     bus.waitUntilEmpty(WAIT_TIMEOUT_MILLIS)
 
     // The exception should be caught, and the event should be propagated to other listeners
-    assert(bus.listenerThreadIsAlive)
     assert(jobCounter1.count === 5)
     assert(jobCounter2.count === 5)
   }
@@ -386,6 +395,31 @@ class SparkListenerSuite extends SparkFunSuite with LocalSparkContext with Match
       .count(_.isInstanceOf[ListenerThatAcceptsSparkConf]) should be (1)
     sc.listenerBus.listeners.asScala
         .count(_.isInstanceOf[FirehoseListenerThatAcceptsSparkConf]) should be (1)
+  }
+
+  test("add and remove listeners to/from LiveListenerBus queues") {
+    val bus = new LiveListenerBus(new SparkConf(false))
+    val counter1 = new BasicJobCounter()
+    val counter2 = new BasicJobCounter()
+    val counter3 = new BasicJobCounter()
+
+    bus.addToSharedQueue(counter1)
+    bus.addToStatusQueue(counter2)
+    bus.addToStatusQueue(counter3)
+    assert(bus.activeQueues() === Set(SHARED_QUEUE, APP_STATUS_QUEUE))
+    assert(bus.findListenersByClass[BasicJobCounter]().size === 3)
+
+    bus.removeListener(counter1)
+    assert(bus.activeQueues() === Set(APP_STATUS_QUEUE))
+    assert(bus.findListenersByClass[BasicJobCounter]().size === 2)
+
+    bus.removeListener(counter2)
+    assert(bus.activeQueues() === Set(APP_STATUS_QUEUE))
+    assert(bus.findListenersByClass[BasicJobCounter]().size === 1)
+
+    bus.removeListener(counter3)
+    assert(bus.activeQueues().isEmpty)
+    assert(bus.findListenersByClass[BasicJobCounter]().isEmpty)
   }
 
   /**

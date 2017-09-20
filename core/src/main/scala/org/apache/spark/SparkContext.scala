@@ -195,6 +195,7 @@ class SparkContext(config: SparkConf) extends Logging {
   private var _conf: SparkConf = _
   private var _eventLogDir: Option[URI] = None
   private var _eventLogCodec: Option[String] = None
+  private var _listenerBus: LiveListenerBus = _
   private var _env: SparkEnv = _
   private var _jobProgressListener: JobProgressListener = _
   private var _statusTracker: SparkStatusTracker = _
@@ -247,7 +248,7 @@ class SparkContext(config: SparkConf) extends Logging {
   def isStopped: Boolean = stopped.get()
 
   // An asynchronous listener bus for Spark events
-  private[spark] val listenerBus = new LiveListenerBus(this)
+  private[spark] def listenerBus: LiveListenerBus = _listenerBus
 
   // This function allows components created by SparkEnv to be mocked in unit tests:
   private[spark] def createSparkEnv(
@@ -388,6 +389,8 @@ class SparkContext(config: SparkConf) extends Logging {
         "Deployment to YARN is not supported directly by SparkContext. Please use spark-submit.")
     }
 
+    _listenerBus = new LiveListenerBus(_conf)
+
     if (_conf.getBoolean("spark.logConf", false)) {
       logInfo("Spark configuration:\n" + _conf.toDebugString)
     }
@@ -426,7 +429,7 @@ class SparkContext(config: SparkConf) extends Logging {
     // "_jobProgressListener" should be set up before creating SparkEnv because when creating
     // "SparkEnv", some messages will be posted to "listenerBus" and we should not miss them.
     _jobProgressListener = new JobProgressListener(_conf)
-    listenerBus.addListener(jobProgressListener)
+    listenerBus.addToStatusQueue(jobProgressListener)
 
     // Create the Spark execution environment (cache, map output tracker, etc)
     _env = createSparkEnv(_conf, isLocal, listenerBus)
@@ -449,7 +452,7 @@ class SparkContext(config: SparkConf) extends Logging {
 
     _ui =
       if (conf.getBoolean("spark.ui.enabled", true)) {
-        Some(SparkUI.createLiveUI(this, _conf, listenerBus, _jobProgressListener,
+        Some(SparkUI.createLiveUI(this, _conf, _jobProgressListener,
           _env.securityManager, appName, startTime = startTime))
       } else {
         // For tests, do not enable the UI
@@ -529,7 +532,7 @@ class SparkContext(config: SparkConf) extends Logging {
           new EventLoggingListener(_applicationId, _applicationAttemptId, _eventLogDir.get,
             _conf, _hadoopConfiguration)
         logger.start()
-        listenerBus.addListener(logger)
+        listenerBus.addToEventLogQueue(logger)
         Some(logger)
       } else {
         None
@@ -1568,7 +1571,7 @@ class SparkContext(config: SparkConf) extends Logging {
    */
   @DeveloperApi
   def addSparkListener(listener: SparkListenerInterface) {
-    listenerBus.addListener(listener)
+    listenerBus.addToSharedQueue(listener)
   }
 
   /**
@@ -1884,8 +1887,7 @@ class SparkContext(config: SparkConf) extends Logging {
    */
   def stop(): Unit = {
     if (LiveListenerBus.withinListenerThread.value) {
-      throw new SparkException(
-        s"Cannot stop SparkContext within listener thread of ${LiveListenerBus.name}")
+      throw new SparkException(s"Cannot stop SparkContext within listener bus thread.")
     }
     // Use the stopping variable to ensure no contention for the stop scenario.
     // Still track the stopped variable for use elsewhere in the code.
@@ -2383,7 +2385,7 @@ class SparkContext(config: SparkConf) extends Logging {
                 " parameter from breaking Spark's ability to find a valid constructor.")
           }
         }
-        listenerBus.addListener(listener)
+        listenerBus.addToSharedQueue(listener)
         logInfo(s"Registered listener $className")
       }
     } catch {
@@ -2395,7 +2397,7 @@ class SparkContext(config: SparkConf) extends Logging {
         }
     }
 
-    listenerBus.start()
+    listenerBus.start(this)
     _listenerBusStarted = true
   }
 
