@@ -1,3 +1,6 @@
+### Criteo Fork specific build information
+[![Build Status](https://api.travis-ci.org/criteo-forks/spark.svg?branch=criteo-2.2)](https://travis-ci.org/criteo-forks/spark/)
+
 # Apache Spark
 
 Spark is a fast and general cluster computing system for Big Data. It provides
