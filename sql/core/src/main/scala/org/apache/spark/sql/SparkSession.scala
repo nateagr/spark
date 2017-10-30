@@ -409,6 +409,7 @@ class SparkSession private(
    * @since 1.6.0
    */
   def createDataFrame(data: java.util.List[_], beanClass: Class[_]): DataFrame = {
+    val attrSeq = getSchema(beanClass)
     val rows = SQLContext.beansToRows(data.asScala.iterator, beanClass, attrSeq)
     // XXX [[Iterator.toSeq]] creates a closure over non-serializable
     //     [[java.util.ListIterator]] which on Scala 2.10 could break
