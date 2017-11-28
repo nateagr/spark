@@ -1733,7 +1733,11 @@ class DataFrameSuite extends QueryTest with SharedSQLContext {
       .count
   }
 
-  testQuietly("SPARK-19372: Filter can be executed w/o generated code due to JVM code size limit") {
+  // The fix of SPARK-21720 avoid an exception regarding JVM code size limit
+  // TODO: When we make a threshold of splitting statements (1024) configurable,
+  // we will re-enable this with max threshold to cause an exception
+  // See https://github.com/apache/spark/pull/18972/files#r150223463
+  ignore("SPARK-19372: Filter can be executed w/o generated code due to JVM code size limit") {
     val N = 400
     val rows = Seq(Row.fromSeq(Seq.fill(N)("string")))
     val schema = StructType(Seq.tabulate(N)(i => StructField(s"_c$i", StringType)))
@@ -1780,5 +1784,9 @@ class DataFrameSuite extends QueryTest with SharedSQLContext {
       .select(col("DecimalCol")).describe()
     val mean = result.select("DecimalCol").where($"summary" === "mean")
     assert(mean.collect().toSet === Set(Row("0.0345678900000000000000000000000000000")))
+  }
+
+  test("SPARK-22469: compare string with decimal") {
+    checkAnswer(Seq("1.5").toDF("s").filter("s > 0.5"), Row("1.5"))
   }
 }

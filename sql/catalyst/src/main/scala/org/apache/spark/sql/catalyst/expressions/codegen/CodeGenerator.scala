@@ -660,20 +660,7 @@ class CodegenContext {
       returnType: String = "void",
       makeSplitFunction: String => String = identity,
       foldFunctions: Seq[String] => String = _.mkString("", ";\n", ";")): String = {
-    val blocks = new ArrayBuffer[String]()
-    val blockBuilder = new StringBuilder()
-    for (code <- expressions) {
-      // We can't know how many bytecode will be generated, so use the length of source code
-      // as metric. A method should not go beyond 8K, otherwise it will not be JITted, should
-      // also not be too small, or it will have many function calls (for wide table), see the
-      // results in BenchmarkWideTable.
-      if (blockBuilder.length > 1024) {
-        blocks += blockBuilder.toString()
-        blockBuilder.clear()
-      }
-      blockBuilder.append(code)
-    }
-    blocks += blockBuilder.toString()
+    val blocks = buildCodeBlocks(expressions)
 
     if (blocks.length == 1) {
       // inline execution if only one block
@@ -694,6 +681,59 @@ class CodegenContext {
 
       foldFunctions(functions.map(name => s"$name(${arguments.map(_._2).mkString(", ")})"))
     }
+  }
+
+  /**
+   * Splits the generated code of expressions into multiple sequences of String
+   * based on a threshold of length of a String
+   *
+   * @param expressions the codes to evaluate expressions.
+   */
+  def buildCodeBlocks(expressions: Seq[String]): Seq[String] = {
+    val blocks = new ArrayBuffer[String]()
+    val blockBuilder = new StringBuilder()
+    for (code <- expressions) {
+      // We can't know how many bytecode will be generated, so use the length of source code
+      // as metric. A method should not go beyond 8K, otherwise it will not be JITted, should
+      // also not be too small, or it will have many function calls (for wide table), see the
+      // results in BenchmarkWideTable.
+      if (blockBuilder.length > 1024) {
+        blocks += blockBuilder.toString()
+        blockBuilder.clear()
+      }
+      blockBuilder.append(code)
+    }
+    blocks += blockBuilder.toString()
+  }
+
+  /**
+   * Wrap the generated code of expression, which was created from a row object in INPUT_ROW,
+   * by a function. ev.isNull and ev.value are passed by global variables
+   *
+   * @param ev the code to evaluate expressions.
+   * @param dataType the data type of ev.value.
+   * @param baseFuncName the split function name base.
+   */
+  def createAndAddFunction(
+      ev: ExprCode,
+      dataType: DataType,
+      baseFuncName: String): (String, String, String) = {
+    val globalIsNull = freshName("isNull")
+    addMutableState("boolean", globalIsNull, s"$globalIsNull = false;")
+    val globalValue = freshName("value")
+    addMutableState(javaType(dataType), globalValue,
+      s"$globalValue = ${defaultValue(dataType)};")
+    val funcName = freshName(baseFuncName)
+    val funcBody =
+      s"""
+         |private void $funcName(InternalRow ${INPUT_ROW}) {
+         |  ${ev.code.trim}
+         |  $globalIsNull = ${ev.isNull};
+         |  $globalValue = ${ev.value};
+         |}
+         """.stripMargin
+    addNewFunction(funcName, funcBody)
+    (funcName, globalIsNull, globalValue)
   }
 
   /**
