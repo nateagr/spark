@@ -220,4 +220,12 @@ package object config {
       " bigger files.")
     .longConf
     .createWithDefault(4 * 1024 * 1024)
+
+  private[spark] val TASK_METRICS_TRACK_UPDATED_BLOCK_STATUSES =
+    ConfigBuilder("spark.taskMetrics.trackUpdatedBlockStatuses")
+      .doc("Enable tracking of updatedBlockStatuses in the TaskMetrics. Off by default since " +
+        "tracking the block statuses can use a lot of memory and its not used anywhere within " +
+        "spark.")
+      .booleanConf
+      .createWithDefault(false)
 }

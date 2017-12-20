@@ -35,6 +35,7 @@ import org.scalatest.concurrent.Timeouts._
 import org.apache.spark._
 import org.apache.spark.broadcast.BroadcastManager
 import org.apache.spark.executor.DataReadMethod
+import org.apache.spark.internal.config
 import org.apache.spark.memory.UnifiedMemoryManager
 import org.apache.spark.network.{BlockDataManager, BlockTransferService}
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
@@ -879,8 +880,35 @@ class BlockManagerSuite extends SparkFunSuite with Matchers with BeforeAndAfterE
     }
   }
 
+  test("turn off updated block statuses") {
+    store = makeBlockManager(12000)
+    store.conf.set(config.TASK_METRICS_TRACK_UPDATED_BLOCK_STATUSES, false)
+    store.registerTask(0)
+    val list = List.fill(2)(new Array[Byte](2000))
+
+    def getUpdatedBlocks(task: => Unit): Seq[(BlockId, BlockStatus)] = {
+      val context = TaskContext.empty()
+      try {
+        TaskContext.setTaskContext(context)
+        task
+      } finally {
+        TaskContext.unset()
+      }
+      context.taskMetrics.updatedBlockStatuses
+    }
+
+    // 1 updated block (i.e. list1)
+    val updatedBlocks1 = getUpdatedBlocks {
+      store.putIterator(
+        "list1", list.iterator, StorageLevel.MEMORY_ONLY, tellMaster = true)
+    }
+    assert(updatedBlocks1.size === 0)
+  }
+
+
   test("updated block statuses") {
     store = makeBlockManager(12000)
+    store.conf.set(config.TASK_METRICS_TRACK_UPDATED_BLOCK_STATUSES, true)
     store.registerTask(0)
     val list = List.fill(2)(new Array[Byte](2000))
     val bigList = List.fill(8)(new Array[Byte](2000))
