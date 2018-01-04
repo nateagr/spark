@@ -22,6 +22,7 @@ import java.util.concurrent._
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import scala.reflect.ClassTag
 import scala.util.DynamicVariable
 
@@ -54,6 +55,9 @@ private[spark] class LiveListenerBus(conf: SparkConf) {
   @volatile private var lastReportTimestamp = 0L
 
   private val queues = new CopyOnWriteArrayList[AsyncEventQueue]()
+
+  // Visible for testing.
+  @volatile private[scheduler] var queuedEvents = new mutable.ListBuffer[SparkListenerEvent]()
 
   /** Add a listener to queue shared by all non-internal listeners. */
   def addToSharedQueue(listener: SparkListenerInterface): Unit = {
@@ -116,11 +120,36 @@ private[spark] class LiveListenerBus(conf: SparkConf) {
 
   /** Post an event to all queues. */
   def post(event: SparkListenerEvent): Unit = {
-    if (!stopped.get()) {
-      val it = queues.iterator()
-      while (it.hasNext()) {
-        it.next().post(event)
+    if (stopped.get()) {
+      return
+    }
+
+    // If the event buffer is null, it means the bus has been started and we can avoid
+    // synchronization and post events directly to the queues. This should be the most
+    // common case during the life of the bus.
+    if (queuedEvents == null) {
+      postToQueues(event)
+      return
+    }
+
+    // Otherwise, need to synchronize to check whether the bus is started, to make sure the thread
+    // calling start() picks up the new event.
+    synchronized {
+      if (!started.get()) {
+        queuedEvents += event
+        return
       }
+    }
+
+    // If the bus was already started when the check above was made, just post directly to the
+    // queues.
+    postToQueues(event)
+  }
+
+  private def postToQueues(event: SparkListenerEvent): Unit = {
+    val it = queues.iterator()
+    while (it.hasNext()) {
+      it.next().post(event)
     }
   }
 
@@ -138,7 +167,11 @@ private[spark] class LiveListenerBus(conf: SparkConf) {
     }
 
     this.sparkContext = sc
-    queues.asScala.foreach(_.start(sc))
+    queues.asScala.foreach { q =>
+      q.start(sc)
+      queuedEvents.foreach(q.post)
+    }
+    queuedEvents = null
   }
 
   /**
