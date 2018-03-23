@@ -17,9 +17,10 @@
 
 package org.apache.spark.deploy.history
 
+import collection.JavaConverters._
 import java.io.{FileNotFoundException, IOException, OutputStream}
 import java.util.UUID
-import java.util.concurrent.{Executors, ExecutorService, Future, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, Executors, ExecutorService, Future, TimeUnit}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
 import scala.collection.mutable
@@ -122,7 +123,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
   @volatile private var applications: mutable.LinkedHashMap[String, FsApplicationHistoryInfo]
     = new mutable.LinkedHashMap()
 
-  val fileToAppInfo = new mutable.HashMap[Path, FsApplicationAttemptInfo]()
+  val fileToAppInfo = new ConcurrentHashMap[Path, FsApplicationAttemptInfo]().asScala
 
   // List of application logs to be deleted by event log cleaner.
   private var attemptsToClean = new mutable.ListBuffer[FsApplicationAttemptInfo]
