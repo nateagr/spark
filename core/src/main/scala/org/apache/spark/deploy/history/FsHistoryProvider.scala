@@ -17,7 +17,6 @@
 
 package org.apache.spark.deploy.history
 
-import collection.JavaConverters._
 import java.io.{FileNotFoundException, IOException, OutputStream}
 import java.util.UUID
 import java.util.concurrent.{ConcurrentHashMap, Executors, ExecutorService, Future, TimeUnit}
@@ -26,6 +25,7 @@ import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable
 import scala.xml.Node
 
+import collection.JavaConverters._
 import com.google.common.io.ByteStreams
 import com.google.common.util.concurrent.{MoreExecutors, ThreadFactoryBuilder}
 import org.apache.hadoop.fs.{FileStatus, Path}
