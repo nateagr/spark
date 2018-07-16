@@ -60,13 +60,13 @@ object SparkHadoopMapReduceWriter extends Logging {
       hadoopConf: Configuration): Unit = {
     // Extract context and configuration from RDD.
     val sparkContext = rdd.context
-    val stageId = rdd.id
+    val commitJobId = rdd.id
     val sparkConf = rdd.conf
     val conf = new SerializableConfiguration(hadoopConf)
 
     // Set up a job.
     val jobTrackerId = SparkHadoopWriterUtils.createJobTrackerID(new Date())
-    val jobAttemptId = new TaskAttemptID(jobTrackerId, stageId, TaskType.MAP, 0, 0)
+    val jobAttemptId = new TaskAttemptID(jobTrackerId, commitJobId, TaskType.MAP, 0, 0)
     val jobContext = new TaskAttemptContextImpl(conf.value, jobAttemptId)
     val format = jobContext.getOutputFormatClass
 
@@ -78,7 +78,7 @@ object SparkHadoopMapReduceWriter extends Logging {
 
     val committer = FileCommitProtocol.instantiate(
       className = classOf[HadoopMapReduceCommitProtocol].getName,
-      jobId = stageId.toString,
+      jobId = commitJobId.toString,
       outputPath = conf.value.get("mapreduce.output.fileoutputformat.outputdir"),
       isAppend = false).asInstanceOf[HadoopMapReduceCommitProtocol]
     committer.setupJob(jobContext)
@@ -86,12 +86,16 @@ object SparkHadoopMapReduceWriter extends Logging {
     // Try to write all RDD partitions as a Hadoop OutputFormat.
     try {
       val ret = sparkContext.runJob(rdd, (context: TaskContext, iter: Iterator[(K, V)]) => {
+        // SPARK-24552: Generate a unique "attempt ID" based on the stage and task attempt numbers.
+        // Assumes that there won't be more than Short.MaxValue attempts, at least not concurrently.
+        val attemptId = (context.stageAttemptNumber << 16) | context.attemptNumber
+
         executeTask(
           context = context,
           jobTrackerId = jobTrackerId,
-          sparkStageId = context.stageId,
+          commitJobId = commitJobId,
           sparkPartitionId = context.partitionId,
-          sparkAttemptNumber = context.attemptNumber,
+          sparkAttemptNumber = attemptId,
           committer = committer,
           hadoopConf = conf.value,
           outputFormat = format.asInstanceOf[Class[OutputFormat[K, V]]],
@@ -112,7 +116,7 @@ object SparkHadoopMapReduceWriter extends Logging {
   private def executeTask[K, V: ClassTag](
       context: TaskContext,
       jobTrackerId: String,
-      sparkStageId: Int,
+      commitJobId: Int,
       sparkPartitionId: Int,
       sparkAttemptNumber: Int,
       committer: FileCommitProtocol,
@@ -120,7 +124,7 @@ object SparkHadoopMapReduceWriter extends Logging {
       outputFormat: Class[_ <: OutputFormat[K, V]],
       iterator: Iterator[(K, V)]): TaskCommitMessage = {
     // Set up a task.
-    val attemptId = new TaskAttemptID(jobTrackerId, sparkStageId, TaskType.REDUCE,
+    val attemptId = new TaskAttemptID(jobTrackerId, commitJobId, TaskType.REDUCE,
       sparkPartitionId, sparkAttemptNumber)
     val taskContext = new TaskAttemptContextImpl(hadoopConf, attemptId)
     committer.setupTask(taskContext)
