@@ -2602,7 +2602,7 @@
         <property><name>!scala-2.10</name></property>
       </activation>
       <properties>
-        <scala.version>2.11.8</scala.version>
+        <scala.version>2.11.12</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
         <jline.version>2.12.1</jline.version>
         <jline.groupid>jline</jline.groupid>
