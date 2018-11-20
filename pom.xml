@@ -2604,7 +2604,7 @@
       <properties>
         <scala.version>2.11.12</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
-        <jline.version>2.12.1</jline.version>
+        <jline.version>2.14.3</jline.version>
         <jline.groupid>jline</jline.groupid>
       </properties>
       <build>
