@@ -33,7 +33,6 @@ public class TransportConf {
   private final String SPARK_NETWORK_IO_CONNECTIONTIMEOUT_KEY;
   private final String SPARK_NETWORK_IO_BACKLOG_KEY;
   private final String SPARK_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY;
-  private final String SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY;
   private final String SPARK_NETWORK_IO_SERVERTHREADS_KEY;
   private final String SPARK_NETWORK_IO_CLIENTTHREADS_KEY;
   private final String SPARK_NETWORK_IO_RECEIVEBUFFER_KEY;
@@ -56,7 +55,6 @@ public class TransportConf {
     SPARK_NETWORK_IO_CONNECTIONTIMEOUT_KEY = getConfKey("io.connectionTimeout");
     SPARK_NETWORK_IO_BACKLOG_KEY = getConfKey("io.backLog");
     SPARK_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY =  getConfKey("io.numConnectionsPerPeer");
-    SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY = getConfKey("io.serverBossThreads");
     SPARK_NETWORK_IO_SERVERTHREADS_KEY = getConfKey("io.serverThreads");
     SPARK_NETWORK_IO_CLIENTTHREADS_KEY = getConfKey("io.clientThreads");
     SPARK_NETWORK_IO_RECEIVEBUFFER_KEY = getConfKey("io.receiveBuffer");
@@ -111,10 +109,7 @@ public class TransportConf {
   /** Requested maximum length of the queue of incoming connections. Default -1 for no backlog. */
   public int backLog() { return conf.getInt(SPARK_NETWORK_IO_BACKLOG_KEY, -1); }
 
-  /** Number of threads used to handle new connection in the server thread pool. Default to 1. */
-  public int serverBossThreads() { return conf.getInt(SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY, 1); }
-
-  /** Number of threads used to handle requests in the server thread pool. Default to 0, which is 2x#cores. */
+  /** Number of threads used in the server thread pool. Default to 0, which is 2x#cores. */
   public int serverThreads() { return conf.getInt(SPARK_NETWORK_IO_SERVERTHREADS_KEY, 0); }
 
   /** Number of threads used in the client thread pool. Default to 0, which is 2x#cores. */
