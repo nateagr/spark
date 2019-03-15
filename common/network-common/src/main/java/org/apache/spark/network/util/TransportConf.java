@@ -21,7 +21,6 @@ import java.util.Locale;
 import java.util.Properties;
 
 import com.google.common.primitives.Ints;
-import io.netty.util.NettyRuntime;
 
 /**
  * A central location that tracks all the settings we expose to users.
@@ -33,7 +32,6 @@ public class TransportConf {
   private final String SPARK_NETWORK_IO_CONNECTIONTIMEOUT_KEY;
   private final String SPARK_NETWORK_IO_BACKLOG_KEY;
   private final String SPARK_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY;
-  private final String SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY;
   private final String SPARK_NETWORK_IO_SERVERTHREADS_KEY;
   private final String SPARK_NETWORK_IO_CLIENTTHREADS_KEY;
   private final String SPARK_NETWORK_IO_RECEIVEBUFFER_KEY;
@@ -56,7 +54,6 @@ public class TransportConf {
     SPARK_NETWORK_IO_CONNECTIONTIMEOUT_KEY = getConfKey("io.connectionTimeout");
     SPARK_NETWORK_IO_BACKLOG_KEY = getConfKey("io.backLog");
     SPARK_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY =  getConfKey("io.numConnectionsPerPeer");
-    SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY = getConfKey("io.serverBossThreads");
     SPARK_NETWORK_IO_SERVERTHREADS_KEY = getConfKey("io.serverThreads");
     SPARK_NETWORK_IO_CLIENTTHREADS_KEY = getConfKey("io.clientThreads");
     SPARK_NETWORK_IO_RECEIVEBUFFER_KEY = getConfKey("io.receiveBuffer");
@@ -111,10 +108,7 @@ public class TransportConf {
   /** Requested maximum length of the queue of incoming connections. Default -1 for no backlog. */
   public int backLog() { return conf.getInt(SPARK_NETWORK_IO_BACKLOG_KEY, -1); }
 
-  /** Number of threads used to handle new connection in the server thread pool. Default to 1. */
-  public int serverBossThreads() { return conf.getInt(SPARK_NETWORK_IO_SERVERBOSSTHREADS_KEY, 1); }
-
-  /** Number of threads used to handle requests in the server thread pool. Default to 0, which is 2x#cores. */
+  /** Number of threads used in the server thread pool. Default to 0, which is 2x#cores. */
   public int serverThreads() { return conf.getInt(SPARK_NETWORK_IO_SERVERTHREADS_KEY, 0); }
 
   /** Number of threads used in the client thread pool. Default to 0, which is 2x#cores. */
@@ -286,32 +280,5 @@ public class TransportConf {
    */
   public long maxChunksBeingTransferred() {
     return conf.getLong("spark.shuffle.maxChunksBeingTransferred", Long.MAX_VALUE);
-  }
-
-  /**
-   * Percentage of io.serverThreads used by netty to process ChunkFetchRequest.
-   * Shuffle server will use a separate EventLoopGroup to process ChunkFetchRequest messages.
-   * Although when calling the async writeAndFlush on the underlying channel to send
-   * response back to client, the I/O on the channel is still being handled by
-   * {@link org.apache.spark.network.server.TransportServer}'s default EventLoopGroup
-   * that's registered with the Channel, by waiting inside the ChunkFetchRequest handler
-   * threads for the completion of sending back responses, we are able to put a limit on
-   * the max number of threads from TransportServer's default EventLoopGroup that are
-   * going to be consumed by writing response to ChunkFetchRequest, which are I/O intensive
-   * and could take long time to process due to disk contentions. By configuring a slightly
-   * higher number of shuffler server threads, we are able to reserve some threads for
-   * handling other RPC messages, thus making the Client less likely to experience timeout
-   * when sending RPC messages to the shuffle server. Default to 0, which is 2*#cores
-   * or io.serverThreads. 90 would mean 90% of 2*#cores or 90% of io.serverThreads
-   * which equals 0.9 * 2*#cores or 0.9 * io.serverThreads.
-   */
-  public int chunkFetchHandlerThreads() {
-    if (!this.getModuleName().equalsIgnoreCase("shuffle")) {
-      return 0;
-    }
-    int chunkFetchHandlerThreadsPercent =
-      conf.getInt("spark.shuffle.server.chunkFetchHandlerThreadsPercent", 0);
-    return this.serverThreads() > 0 ? (this.serverThreads() * chunkFetchHandlerThreadsPercent)/100:
-      (2 * NettyRuntime.availableProcessors() * chunkFetchHandlerThreadsPercent)/100;
   }
 }
