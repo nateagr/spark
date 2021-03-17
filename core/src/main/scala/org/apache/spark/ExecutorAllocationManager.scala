@@ -88,6 +88,9 @@ private[spark] class ExecutorAllocationManager(
 
   import ExecutorAllocationManager._
 
+  // If True then executors will be requested without locality hints
+  private val ignoreTaskLocality = conf.get(DYN_ALLOCATION_IGNORE_TASK_LOCALITY)
+  
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
   private val maxNumExecutors = conf.get(DYN_ALLOCATION_MAX_EXECUTORS)
@@ -626,7 +629,9 @@ private[spark] class ExecutorAllocationManager(
           (numTasksPending, hostToLocalTaskCountPerStage.toMap))
 
         // Update the executor placement hints
-        updateExecutorPlacementHints()
+        if (!allocationManager.ignoreTaskLocality) {
+          updateExecutorPlacementHints()
+        }
       }
     }
 
@@ -638,7 +643,9 @@ private[spark] class ExecutorAllocationManager(
         stageIdToExecutorPlacementHints -= stageId
 
         // Update the executor placement hints
-        updateExecutorPlacementHints()
+        if (!allocationManager.ignoreTaskLocality) {
+          updateExecutorPlacementHints()
+        }
 
         // If this is the last stage with pending tasks, mark the scheduler queue as empty
         // This is needed in case the stage is aborted for any reason
