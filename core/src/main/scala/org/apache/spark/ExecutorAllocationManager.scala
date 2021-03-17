@@ -26,7 +26,7 @@ import scala.util.control.ControlThrowable
 import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.{DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS, DYN_ALLOCATION_IGNORE_TASK_LOCALITY}
+import org.apache.spark.internal.config.{DYN_ALLOCATION_IGNORE_TASK_LOCALITY, DYN_ALLOCATION_MAX_EXECUTORS, DYN_ALLOCATION_MIN_EXECUTORS}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.scheduler._
 import org.apache.spark.util.{Clock, SystemClock, ThreadUtils, Utils}
@@ -90,7 +90,7 @@ private[spark] class ExecutorAllocationManager(
 
   // If True then executors will be requested without locality hints
   private val ignoreTaskLocality = conf.get(DYN_ALLOCATION_IGNORE_TASK_LOCALITY)
-  
+
   // Lower and upper bounds on the number of executors.
   private val minNumExecutors = conf.get(DYN_ALLOCATION_MIN_EXECUTORS)
   private val maxNumExecutors = conf.get(DYN_ALLOCATION_MAX_EXECUTORS)

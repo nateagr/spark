@@ -64,7 +64,7 @@ package object config {
 
   private[spark] val DYN_ALLOCATION_IGNORE_TASK_LOCALITY =
     ConfigBuilder("spark.dynamicAllocation.ignoreTaskLocality").booleanConf.createWithDefault(false)
-  
+
   private[spark] val DYN_ALLOCATION_MIN_EXECUTORS =
     ConfigBuilder("spark.dynamicAllocation.minExecutors").intConf.createWithDefault(0)
 
